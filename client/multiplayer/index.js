@@ -15,11 +15,14 @@ document.getElementById('form').addEventListener('submit', (event) => {
   roomName = roomName.substring(0, ROOM_NAME_MAX_LENGTH);
 
   const isPrivate = document.getElementById('private-room-checkbox').checked;
-  if (isPrivate) {
-    window.location.href = `/multiplayer/${encodeURIComponent(roomName)}?private=${isPrivate}`;
-  } else {
-    window.location.href = '/multiplayer/' + encodeURIComponent(roomName);
-  }
+  const isControlled = document.getElementById('controlled-room-checkbox').checked;
+
+  const params = new URLSearchParams();
+
+  if (isPrivate) params.set('private', 'true');
+  if (isControlled) params.set('controlled', 'true');
+
+  window.location.href = `/multiplayer/${encodeURIComponent(roomName)}?${params.toString()}`;
 });
 
 fetch('/api/multiplayer/room-list')

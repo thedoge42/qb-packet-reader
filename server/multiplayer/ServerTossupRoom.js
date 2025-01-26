@@ -37,7 +37,8 @@ export default class ServerTossupRoom extends TossupRoom {
       ...this.settings,
       lock: false,
       loginRequired: false,
-      public: true
+      public: true,
+      controlled: false
     };
 
     this.getSetList().then(setList => { this.setList = setList; });
@@ -50,6 +51,7 @@ export default class ServerTossupRoom extends TossupRoom {
       case 'chat': return this.chat(userId, message);
       case 'chat-live-update': return this.chatLiveUpdate(userId, message);
       case 'give-answer-live-update': return this.giveAnswerLiveUpdate(userId, message);
+      case 'toggle-controlled': return this.toggleControlled(userId, message);
       case 'toggle-lock': return this.toggleLock(userId, message);
       case 'toggle-login-required': return this.toggleLoginRequired(userId, message);
       case 'toggle-mute': return this.toggleMute(userId, message);
@@ -58,6 +60,11 @@ export default class ServerTossupRoom extends TossupRoom {
       case 'votekick-vote': return this.votekickVote(userId, message);
       default: super.message(userId, message);
     }
+  }
+
+  allowed (userId) {
+    if (this.settings.public && !this.isPermanent) { return true; } // public rooms have iscontrolled disabled
+    if ((userId === this.ownerId) || !this.settings.controlled) { return true; } else { return false; }
   }
 
   ban (userId, { targetId, targetUsername }) {
@@ -71,6 +78,11 @@ export default class ServerTossupRoom extends TossupRoom {
   connection (socket, userId, username) {
     console.log(`Connection in room ${HEADER}${this.name}${ENDC} - ID of owner: ${OKBLUE}${this.ownerId}${ENDC} - userId: ${OKBLUE}${userId}${ENDC}, username: ${OKBLUE}${username}${ENDC} - with settings ${OKGREEN}${Object.keys(this.settings).map(key => [key, this.settings[key]].join(': ')).join('; ')};${ENDC}`);
     this.cleanupExpiredBansAndKicks();
+
+    if (this.sockets[userId]) {
+      this.sendToSocket(userId, { type: 'error', message: 'You joined in another tab' });
+      this.close(userId);
+    }
 
     const isNew = !(userId in this.players);
     if (isNew) { this.players[userId] = new ServerPlayer(userId); }
@@ -176,7 +188,7 @@ export default class ServerTossupRoom extends TossupRoom {
 
   close (userId) {
     if (this.buzzedIn === userId) {
-      this.giveAnswer(userId, '');
+      this.giveAnswer(userId, this.liveAnswer);
       this.buzzedIn = null;
     }
     this.leave(userId);
@@ -191,17 +203,17 @@ export default class ServerTossupRoom extends TossupRoom {
   }
 
   next (userId, { type }) {
-    if (type === 'skip' && this.wordIndex < 5) { return false; } // prevents spam-skipping bots
+    if (type === 'skip' && this.wordIndex < 3) { return false; } // prevents spam-skipping trolls
     super.next(userId, { type });
   }
 
   setCategories (userId, { categories, subcategories, alternateSubcategories, percentView, categoryPercents }) {
-    if (this.isPermanent) { return; }
+    if (this.isPermanent || !this.allowed(userId)) { return; }
     super.setCategories(userId, { categories, subcategories, alternateSubcategories, percentView, categoryPercents });
   }
 
   setMode (userId, { mode, setName }) {
-    if (this.isPermanent) { return; }
+    if (this.isPermanent || !this.allowed(userId)) { return; }
     if (!this.setList) { return; }
     if (!this.setList.includes(setName)) { return; }
     if (this.mode !== MODE_ENUM.SET_NAME && this.mode !== MODE_ENUM.RANDOM) { return; }
@@ -215,13 +227,14 @@ export default class ServerTossupRoom extends TossupRoom {
   }
 
   async setSetName (userId, { setName }) {
+    if (!this.allowed(userId)) { return; }
     if (!this.setList) { return; }
     if (!this.setList.includes(setName)) { return; }
     super.setSetName(userId, { setName });
   }
 
   setStrictness (userId, { strictness }) {
-    if (this.isPermanent) { return; }
+    if (this.isPermanent || !this.allowed) { return; }
     super.setStrictness(userId, { strictness });
   }
 
@@ -242,15 +255,22 @@ export default class ServerTossupRoom extends TossupRoom {
     this.emitMessage({ type: 'set-username', userId, oldUsername, newUsername });
   }
 
-  toggleLock (userId, { lock }) {
+  toggleControlled (userId, { controlled }) {
     if (this.settings.public) { return; }
+    this.settings.controlled = !!controlled;
+    const username = this.players[userId].username;
+    this.emitMessage({ type: 'toggle-controlled', controlled, username });
+  }
+
+  toggleLock (userId, { lock }) {
+    if (this.settings.public || !this.allowed(userId)) { return; }
     this.settings.lock = lock;
     const username = this.players[userId].username;
     this.emitMessage({ type: 'toggle-lock', lock, username });
   }
 
   toggleLoginRequired (userId, { loginRequired }) {
-    if (this.settings.public) { return; }
+    if (this.settings.public || !this.allowed(userId)) { return; }
     this.settings.loginRequired = loginRequired;
     const username = this.players[userId].username;
     this.emitMessage({ type: 'toggle-login-required', loginRequired, username });
@@ -261,7 +281,7 @@ export default class ServerTossupRoom extends TossupRoom {
   }
 
   togglePublic (userId, { public: isPublic }) {
-    if (this.isPermanent) { return; }
+    if (this.isPermanent || !this.allowed(userId)) { return; }
     this.settings.public = isPublic;
     this.settings.timer = true;
     const username = this.players[userId].username;
@@ -273,7 +293,7 @@ export default class ServerTossupRoom extends TossupRoom {
   }
 
   toggleTimer (userId, { timer }) {
-    if (this.settings.public) { return; }
+    if (this.settings.public || !this.allowed(userId)) { return; }
     super.toggleTimer(userId, { timer });
   }
 
@@ -329,6 +349,16 @@ export default class ServerTossupRoom extends TossupRoom {
     if (thisVotekick.check()) {
       this.emitMessage({ type: 'successful-vk', targetUsername, targetId });
       this.kickedUserList.set(targetId, Date.now());
+
+      if (targetId === this.ownerId) {
+        const onlinePlayers = Object.keys(this.players).filter(playerId => this.players[playerId].online);
+        const newHost = onlinePlayers.reduce((maxPlayer, playerId) => (this.players[playerId].tuh || 0) > (this.players[maxPlayer].tuh || 0) ? playerId : maxPlayer, onlinePlayers[0]);
+        // ^^ highest tuh player becomes new host
+
+        this.ownerId = newHost;
+
+        this.emitMessage({ type: 'owner-change', newOwner: newHost });
+      }
     }
   }
 }

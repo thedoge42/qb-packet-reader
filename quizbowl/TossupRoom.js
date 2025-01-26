@@ -229,6 +229,7 @@ export default class TossupRoom extends QuestionRoom {
   }
 
   setReadingSpeed (userId, { readingSpeed }) {
+    if (!this.allowed(userId)) return false;
     if (isNaN(readingSpeed)) { return false; }
     if (readingSpeed > 100) { readingSpeed = 100; }
     if (readingSpeed < 0) { readingSpeed = 0; }
@@ -284,6 +285,7 @@ export default class TossupRoom extends QuestionRoom {
   }
 
   togglePowermarkOnly (userId, { powermarkOnly }) {
+    if (!this.allowed(userId)) return false;
     this.query.powermarkOnly = powermarkOnly;
     const username = this.players[userId].username;
     this.adjustQuery(['powermarkOnly'], [powermarkOnly]);
@@ -291,6 +293,7 @@ export default class TossupRoom extends QuestionRoom {
   }
 
   toggleRebuzz (userId, { rebuzz }) {
+    if (!this.allowed(userId)) return false;
     this.settings.rebuzz = rebuzz;
     const username = this.players[userId].username;
     this.emitMessage({ type: 'toggle-rebuzz', rebuzz, username });

@@ -16,6 +16,7 @@ let ownerId = '';
 let maxPacketNumber = 24;
 let globalPublic = true;
 let muteList = [];
+const isPermanent = false;
 /**
  * userId to player object
  */
@@ -27,9 +28,9 @@ let USER_ID = window.localStorage.getItem('USER_ID') || 'unknown';
 let username = window.localStorage.getItem('multiplayer-username') || api.getRandomName();
 
 const socket = new window.WebSocket(
-  window.location.href.replace('http', 'ws') +
-    (window.location.href.endsWith('?private=true') ? '&' : '?') +
+  window.location.href.replace('http', 'ws').split('?')[0] + '?' +
     new URLSearchParams({
+      ...new URLSearchParams(window.location.search),
       roomName: ROOM_NAME,
       userId: USER_ID,
       username
@@ -73,6 +74,7 @@ socket.onmessage = function (event) {
     case 'mute-player': return mutePlayer(data);
     case 'next': return next(data);
     case 'no-questions-found': return noQuestionsFound(data);
+    case 'owner-change': return ownerChange(data);
     case 'pause': return pause(data);
     case 'reveal-answer': return revealAnswer(data);
     case 'set-categories': return setCategories(data);
@@ -88,6 +90,7 @@ socket.onmessage = function (event) {
     case 'start': return next(data);
     case 'successful-vk': return vkHandle(data);
     case 'timer-update': return updateTimerDisplay(data.timeRemaining);
+    case 'toggle-controlled': return toggleControlled(data);
     case 'toggle-lock': return toggleLock(data);
     case 'toggle-login-required': return toggleLoginRequired(data);
     case 'toggle-powermark-only': return togglePowermarkOnly(data);
@@ -192,6 +195,8 @@ function connectionAcknowledged ({
   document.getElementById('buzz').disabled = !canBuzz;
 
   if (isPermanent) {
+    isPermanent = true;
+
     document.getElementById('category-select-button').disabled = true;
     document.getElementById('reading-speed').disabled = true;
     document.getElementById('set-strictness').disabled = true;
@@ -550,6 +555,17 @@ function noQuestionsFound () {
   window.alert('No questions found');
 }
 
+function ownerChange ({ newOwner }) {
+  if (players[newOwner]) {
+    ownerId = newOwner;
+    logEvent(players[newOwner].username, 'became the room owner');
+  } else logEvent(newOwner, 'became the room owner');
+
+  Object.keys(players).forEach((player) => {
+    upsertPlayerItem(players[player], USER_ID, ownerId, socket, globalPublic);
+  });
+}
+
 function pause ({ paused, username }) {
   logEvent(username, `${paused ? '' : 'un'}paused the game`);
   document.getElementById('pause').textContent = paused ? 'Resume' : 'Pause';
@@ -693,6 +709,34 @@ function sortPlayerListGroup (descending = true) {
   }).forEach(item => {
     listGroup.appendChild(item);
   });
+}
+
+function processControlled (yesNo) {
+  document.getElementById('toggle-controlled').checked = yesNo;
+
+  document.getElementById('toggle-lock').disabled = yesNo;
+  document.getElementById('toggle-login-required').disabled = yesNo;
+  document.getElementById('toggle-timer').disabled = yesNo;
+  document.getElementById('toggle-powermark-only').disabled = yesNo;
+  document.getElementById('toggle-public').disabled = yesNo;
+  document.getElementById('toggle-rebuzz').disabled = yesNo;
+
+  document.getElementById('category-select-button').disabled = yesNo;
+  document.getElementById('reading-speed').disabled = yesNo;
+  document.getElementById('set-mode').disabled = yesNo;
+  document.getElementById('set-strictness').disabled = yesNo;
+
+  if (!isPermanent && yesNo) document.getElementById('private-chat-warning').innerHTML = 'This is a controlled room. Some settings can only be edited by the creator.';
+  else if (!isPermanent) document.getElementById('private-chat-warning').innerHTML = '';
+}
+
+function toggleControlled ({ controlled, username }) {
+  logEvent(username, `${controlled ? 'enabled' : 'disabled'} controlled mode`);
+
+  document.getElementById('toggle-controlled').disabled = (globalPublic === false || isPermanent) && ownerId !== USER_ID;
+
+  if (controlled && (globalPublic === false || isPermanent) && ownerId !== USER_ID) processControlled(true);
+  else processControlled(false);
 }
 
 function toggleLock ({ lock, username }) {
@@ -888,6 +932,11 @@ document.getElementById('set-strictness').addEventListener('change', function ()
 
 document.getElementById('set-strictness').addEventListener('input', function () {
   document.getElementById('strictness-display').textContent = this.value;
+});
+
+document.getElementById('toggle-controlled').addEventListener('click', function () {
+  this.blur();
+  socket.send(JSON.stringify({ type: 'toggle-controlled', controlled: this.checked }));
 });
 
 document.getElementById('toggle-lock').addEventListener('click', function () {
